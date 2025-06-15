@@ -152,3 +152,6 @@ $table->dateTime('two_factor_expires_at')->nullable();
 ## TL;DR
 
 This Laravel Todo app implements email-based two-factor authentication using Laravel Fortify. When a user with 2FA enabled attempts to log in, they must enter a time-limited verification code sent to their email. The system includes strong password hashing with Bcrypt, rate limiting to prevent brute force attacks (3 attempts/minute), and automatic password salting. Users can easily enable or disable 2FA from their profile page.
+
+https://github.com/user-attachments/assets/116cc7fb-38de-4165-8e4d-2cace68749fc
+
