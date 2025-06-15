@@ -7,55 +7,148 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
-## About Laravel
+# Laravel Todo App with Enhanced Authentication
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+This Laravel application demonstrates a secure Todo application with advanced authentication features including Multi-Factor Authentication (MFA), strong password hashing, rate limiting, and password salting.
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Authentication Features
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### 1. Two-Factor Authentication (2FA)
+Email-based two-factor authentication is implemented using Laravel Fortify:
+- When a user with 2FA enabled logs in, a 6-digit verification code is sent to their email
+- The code is valid for 10 minutes and is required to complete the login process
+- Users can enable/disable 2FA from their profile page
 
-## Learning Laravel
+### 2. Secure Password Hashing
+- Password hashing uses Laravel's built-in Bcrypt algorithm, ensuring strong encryption
+- Laravel automatically selects secure default settings for the hashing algorithm
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+### 3. Rate Limiting
+- Implemented using Laravel RateLimiter
+- Login attempts are limited to 3 failed attempts per minute per IP address
+- Two-factor authentication verification is limited to 5 attempts per minute per user
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+## Authentication Flow
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+### Registration Process
+1. User registers with name, email, and password
+2. Password is securely hashed using Bcrypt
+3. User is created in the database
+4. User is automatically logged in
 
-## Laravel Sponsors
+### Enabling 2FA
+1. User navigates to their profile page
+2. Under the "Two Factor Authentication" section, user clicks "Enable Two-Factor"
+3. If configured, user must confirm their password
+4. 2FA is enabled for the account
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+### Login with 2FA
+1. User enters email and password on login page
+2. If credentials are correct and 2FA is enabled:
+   - A random 6-digit code is generated
+   - Code is stored in the user record with an expiration time
+   - Code is sent to the user's email address
+   - User is redirected to the 2FA verification page
+3. User checks their email and enters the code
+4. If the code is correct and hasn't expired, the user is logged in
+5. The code is cleared from the database after successful verification
 
-### Premium Partners
+## Code Structure Overview
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+### Key Components
 
-## Contributing
+#### 1. Custom Login Response
+```php
+// app/Http/Responses/LoginResponse.php
+public function toResponse($request)
+{
+    $user = Auth::user();
+    
+    // Generate a 6-digit code
+    $code = rand(100000, 999999);
+    
+    // Save code and expiry to the user
+    $user->update([
+        'two_factor_code' => $code,
+        'two_factor_expires_at' => now()->addMinutes(10),
+    ]);
+    
+    // Send the code via email
+    Mail::to($user->email)->send(new TwoFactorAuthMail($code));
+    
+    // Log the user out
+    Auth::logout();
+    
+    // Store user's ID in session
+    $request->session()->put('login.id', $user->id);
+    
+    // Redirect to the 2FA verification page
+    return redirect()->route('2fa.challenge');
+}
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+#### 2. Two Factor Challenge Controller
+```php
+// app/Http/Controllers/Auth/TwoFactorChallengeController.php
+public function store(Request $request)
+{
+    $request->validate([
+        'code' => 'required|string',
+    ]);
 
-## Code of Conduct
+    $userId = $request->session()->get('login.id');
+    $user = User::find($userId);
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+    if (!$user || $user->two_factor_code !== $request->code || $user->two_factor_expires_at->isPast()) {
+        return back()->withErrors(['code' => 'The code is invalid or has expired.']);
+    }
 
-## Security Vulnerabilities
+    // Clear the 2FA data
+    $user->update([
+        'two_factor_code' => null,
+        'two_factor_expires_at' => null,
+    ]);
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+    // Log the user in
+    Auth::login($user);
+    $request->session()->forget('login.id');
 
-## License
+    return redirect()->intended(config('fortify.home'));
+}
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+#### 3. Rate Limiting Configuration
+```php
+// app/Providers/FortifyServiceProvider.php
+RateLimiter::for('login', function (Request $request) {
+    return Limit::perMinute(3)->by($request->ip())->response(function (Request $request, array $headers) {
+        return response('Too many login attempts. Please try again in a minute.', 429)
+            ->withHeaders($headers);
+    });
+});
+
+RateLimiter::for('two-factor', function (Request $request) {
+    return Limit::perMinute(5)->by($request->session()->get('login.id'));
+});
+```
+
+#### 4. User Model & Database Structure
+```php
+// app/Models/User.php
+protected $fillable = [
+    'name',
+    'email',
+    'password',
+    'two_factor_code',
+    'two_factor_expires_at',
+];
+
+// Database migration added 2FA columns
+// database/migrations/2025_06_15_171141_replace_two_factor_auth_columns.php
+$table->string('two_factor_code')->nullable();
+$table->dateTime('two_factor_expires_at')->nullable();
+```
+
+## TL;DR
+
+This Laravel Todo app implements email-based two-factor authentication using Laravel Fortify. When a user with 2FA enabled attempts to log in, they must enter a time-limited verification code sent to their email. The system includes strong password hashing with Bcrypt, rate limiting to prevent brute force attacks (3 attempts/minute), and automatic password salting. Users can easily enable or disable 2FA from their profile page.
